@@ -1,9 +1,17 @@
 "use server"
 
+import { checkRateLimit, createRateLimiter } from "@/lib/arcjet";
 import { db } from "@/lib/prisma"
+import { request } from "@arcjet/next";
 import { currentUser } from "@clerk/nextjs/server";
 import { StreamClient } from "@stream-io/node-sdk";
 import { revalidatePath } from "next/cache";
+
+const bookingLimiter = createRateLimiter({
+    refillRate:2,
+    interval:"1h",
+    capacity:5,
+})
 
 export const getInterviewerProfile= async (interviewerId)=>{
     try{
@@ -42,6 +50,9 @@ export const bookSlot = async({interviewerId,startTime,endTime})=>{
     if(!user) throw new Error("Unauthorised");
 
     //Rate-limiting by Arcjet
+    const req = await request();
+    const rateLimitError = await checkRateLimit(bookingLimiter, req, user.id);
+    if(rateLimitError) throw new Error(rateLimitError);
 
     const [dbUser,interviewer]=await Promise.all([
         db.user.findUnique({where:{clerkUserId:user.id}}),
@@ -161,6 +172,17 @@ export const bookSlot = async({interviewerId,startTime,endTime})=>{
     });
     revalidatePath(`/interviewers/${interviewerId}`);
     revalidatePath("/dashboard");
-     }catch(error){}
+
+   /* console.log("Returning from bookslot",{
+        success:true,
+        bookingId: booking.id,
+        streamCallId,
+    });*/
+
+    return { success: true, bookingId: booking.id,streamCallId};
+     }catch(error){
+        console.error("bookSlot transaction failed:", error);
+        throw new Error("Booking failed. Please try again.");
+     }
 
 };
